@@ -7,7 +7,10 @@ fn test_start_command_runs_successfully() {
     cmd.arg("start");
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("Starting nyx session..."));
+        .stdout(predicate::str::contains("Your ID: "))
+        .stdout(predicate::str::contains(
+            "Keep your private key secure and do not share it.",
+        ));
 }
 
 #[test]
