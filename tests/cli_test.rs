@@ -35,3 +35,14 @@ fn test_connect_command_runs_successfully_with_id() {
         .success()
         .stdout(predicate::str::contains("Connecting to 8F3A-92KD-XX12"));
 }
+
+#[test]
+fn test_start_session_loop_exits_cleanly() {
+    let mut cmd = Command::cargo_bin("nyx").unwrap();
+
+    cmd.arg("start")
+        .write_stdin("exit\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Session ended."));
+}

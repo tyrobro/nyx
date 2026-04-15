@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use ed25519_dalek::SigningKey;
 use rand::rngs::OsRng;
+use std::io::{self, Write};
 
 #[derive(Parser)]
 #[command(name = "nyx")]
@@ -40,6 +41,30 @@ fn main() {
 
             println!("Your ID: {}", formatted_id);
             println!("Keep your private key secure and do not share it.");
+
+            loop {
+                print!("> ");
+                io::stdout().flush().unwrap();
+
+                let mut input = String::new();
+                if io::stdin().read_line(&mut input).is_err() {
+                    println!("Error reading input");
+                    break;
+                }
+
+                let command = input.trim();
+
+                match command {
+                    "exit" => {
+                        println!("Session ended.");
+                        break;
+                    }
+                    "" => continue,
+                    _ => {
+                        println!("(Messafe not sent - P2P not implemented yet)");
+                    }
+                }
+            }
         }
 
         Commands::Connect { id } => {
