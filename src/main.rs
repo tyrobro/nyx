@@ -3,6 +3,8 @@ use ed25519_dalek::SigningKey;
 use rand::rngs::OsRng;
 use std::io::{self, Write};
 
+mod server;
+
 #[derive(Parser)]
 #[command(name = "nyx")]
 #[command(about = "Anonymous P2P terminal communication", long_about = None)]
@@ -63,7 +65,7 @@ async fn main() {
                     }
                     "" => continue,
                     _ => {
-                        println!("(Messafe not sent - P2P not implemented yet)");
+                        println!("(Message not sent - P2P not implemented yet)");
                     }
                 }
             }
@@ -75,6 +77,9 @@ async fn main() {
 
         Commands::Host => {
             println!("This node is now a Nyx Local Server");
+            if let Err(e) = crate::server::start_server("0.0.0.0:8080").await {
+                eprintln!("Server error: {}", e);
+            }
         }
     }
 }

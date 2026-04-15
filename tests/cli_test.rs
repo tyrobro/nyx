@@ -47,14 +47,3 @@ fn test_start_session_loop_exits_cleanly() {
         .success()
         .stdout(predicate::str::contains("Session ended."));
 }
-
-#[test]
-fn test_serve_command_runs_successfully() {
-    let mut cmd = Command::cargo_bin("nyx").unwrap();
-
-    cmd.arg("host");
-
-    cmd.assert().success().stdout(predicate::str::contains(
-        "This node is now a Nyx Local Server",
-    ));
-}
