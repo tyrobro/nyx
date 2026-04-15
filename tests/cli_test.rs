@@ -4,8 +4,9 @@ use predicates::prelude::*;
 #[test]
 fn test_start_command_runs_successfully() {
     let mut cmd = Command::cargo_bin("nyx").unwrap();
-    cmd.arg("start");
-    cmd.assert()
+    cmd.arg("start")
+        .write_stdin("nyx exit\n")
+        .assert()
         .success()
         .stdout(predicate::str::contains("Your ID: "))
         .stdout(predicate::str::contains(
@@ -41,8 +42,19 @@ fn test_start_session_loop_exits_cleanly() {
     let mut cmd = Command::cargo_bin("nyx").unwrap();
 
     cmd.arg("start")
-        .write_stdin("exit\n")
+        .write_stdin("nyx exit\n")
         .assert()
         .success()
         .stdout(predicate::str::contains("Session ended."));
+}
+
+#[test]
+fn test_serve_command_runs_successfully() {
+    let mut cmd = Command::cargo_bin("nyx").unwrap();
+
+    cmd.arg("host");
+
+    cmd.assert().success().stdout(predicate::str::contains(
+        "This node is now a Nyx Local Server",
+    ));
 }

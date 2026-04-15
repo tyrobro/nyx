@@ -15,9 +15,11 @@ struct Cli {
 enum Commands {
     Start,
     Connect { id: String },
+    Host,
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let cli = Cli::parse();
 
     match &cli.command {
@@ -55,7 +57,7 @@ fn main() {
                 let command = input.trim();
 
                 match command {
-                    "exit" => {
+                    "nyx exit" => {
                         println!("Session ended.");
                         break;
                     }
@@ -69,6 +71,10 @@ fn main() {
 
         Commands::Connect { id } => {
             println!("Connecting to {}...", id);
+        }
+
+        Commands::Host => {
+            println!("This node is now a Nyx Local Server");
         }
     }
 }
