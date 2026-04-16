@@ -1,7 +1,11 @@
 use clap::{Parser, Subcommand};
 use ed25519_dalek::SigningKey;
 use rand::rngs::OsRng;
-use std::io::{self, Write};
+use std::{
+    io::{self, Write},
+    net::TcpStream,
+};
+use tokio::{io::AsyncWriteExt, stream};
 
 mod server;
 
@@ -45,7 +49,25 @@ async fn main() {
 
             println!("Your ID: {}", formatted_id);
             println!("Keep your private key secure and do not share it.");
+            println!("Connecting to network...");
 
+            let mut _keep_alive_stream = None;
+
+            match tokio::net::TcpStream::connect("127.0.0.1:8080").await {
+                Ok(mut stream) => {
+                    if let Err(e) = stream.write_all(formatted_id.as_bytes()).await {
+                        eprintln!("Failed to register with server: {}", e);
+                    } else {
+                        println!("Successfully registered online.");
+                        _keep_alive_stream = Some(stream);
+                    }
+                }
+
+                Err(e) => {
+                    eprintln!("Warning: Could not connect to coordination server ({}).", e);
+                    eprintln!("Running in offline mode. You are not visible to your peers.");
+                }
+            }
             loop {
                 print!("> ");
                 io::stdout().flush().unwrap();
