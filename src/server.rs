@@ -1,17 +1,41 @@
+use std::collections::HashMap;
 use std::io;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
+use tokio::sync::Mutex;
+pub type Registry = Arc<Mutex<HashMap<String, SocketAddr>>>;
 
-pub async fn start_server(addr: &str) -> io::Result<()> {
+pub async fn start_server(addr: &str, registry: Registry) -> io::Result<()> {
     let listener = TcpListener::bind(addr).await?;
     println!("Nyx Coordination Server listening on {}", addr);
 
     loop {
-        let (socket, remote_addr) = listener.accept().await?;
+        let (mut socket, remote_addr) = listener.accept().await?;
+        println!("New connection established from: {}", remote_addr);
 
-        println!("New peer connected: {}", remote_addr);
+        let registry_ref = registry.clone();
 
         tokio::spawn(async move {
-            let _ = socket;
+            let mut buffer = [0; 1024];
+
+            match socket.read(&mut buffer).await {
+                Ok(n) if n > 0 => {
+                    let id = String::from_utf8_lossy(&buffer[..n]).trim().to_string();
+
+                    let mut map = registry_ref.lock().await;
+                    map.insert(id.clone(), remote_addr);
+
+                    println!("Registered peer ID [{}] to IP [{}]", id, remote_addr);
+                }
+                Ok(_) => {
+                    println!("Connection closed by peer before sending ID.");
+                }
+                Err(e) => {
+                    eprintln!("Failed to read from socket: {}", e);
+                }
+            }
         });
     }
 }
@@ -19,29 +43,39 @@ pub async fn start_server(addr: &str) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::AsyncWriteExt;
     use tokio::net::TcpStream;
     use tokio::time::{Duration, sleep};
 
     #[tokio::test]
-    async fn test_server_binds_to_port() {
-        tokio::spawn(async {
-            start_server("127.0.0.1:8080").await.unwrap();
+    async fn test_server_registers_peer() {
+        let registry: Registry = Arc::new(Mutex::new(HashMap::new())); // Fixed typo here
+        let server_registry = registry.clone();
+
+        tokio::spawn(async move {
+            start_server("127.0.0.1:8080", server_registry)
+                .await
+                .unwrap();
         });
 
-        let mut connected = false;
-
+        let mut stream = None;
         for _ in 0..10 {
-            if TcpStream::connect("127.0.0.1:8080").await.is_ok() {
-                connected = true;
+            if let Ok(s) = TcpStream::connect("127.0.0.1:8080").await {
+                stream = Some(s);
                 break;
             }
+            sleep(Duration::from_millis(50)).await;
         }
+        let mut stream = stream.expect("Failed to connect to server");
+
+        stream.write_all(b"MOCK 8F3A 1234").await.unwrap();
 
         sleep(Duration::from_millis(50)).await;
 
+        let map = registry.lock().await;
         assert!(
-            connected,
-            "Failed to connect to the server. Is it listening?"
+            map.contains_key("MOCK 8F3A 1234"), // Fixed typo here
+            "Server failed to register the ID in the phonebook!"
         );
     }
 }

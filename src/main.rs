@@ -77,7 +77,13 @@ async fn main() {
 
         Commands::Host => {
             println!("This node is now a Nyx Local Server");
-            if let Err(e) = crate::server::start_server("0.0.0.0:8080").await {
+            use std::collections::HashMap;
+            use std::sync::Arc;
+            use tokio::sync::Mutex;
+
+            let registry = Arc::new(Mutex::new(HashMap::new()));
+
+            if let Err(e) = crate::server::start_server("0.0.0.0:8080", registry).await {
                 eprintln!("Server error: {}", e);
             }
         }
