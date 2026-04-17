@@ -1,12 +1,11 @@
 use std::collections::HashMap;
 use std::io;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 
-pub type Registry = Arc<Mutex<HashMap<String, SocketAddr>>>;
+pub type Registry = Arc<Mutex<HashMap<String, String>>>;
 
 pub async fn start_server(addr: &str, registry: Registry) -> io::Result<()> {
     let listener = TcpListener::bind(addr).await?;
@@ -25,13 +24,21 @@ pub async fn start_server(addr: &str, registry: Registry) -> io::Result<()> {
                     let message = String::from_utf8_lossy(&buffer[..n]).trim().to_string();
 
                     if message.starts_with("REGISTER:") {
-                        // Strip the prefix and save ONLY the ID
-                        let id = message.strip_prefix("REGISTER:").unwrap().to_string();
-                        registered_id = Some(id.clone());
+                        let parts: Vec<&str> = message.split(":").collect();
+                        if parts.len() == 3 {
+                            let id = parts[1].to_string();
+                            let port = parts[2].to_string();
+                            registered_id = Some(id.clone());
 
-                        let mut map = registry_ref.lock().await;
-                        map.insert(id.clone(), remote_addr);
-                        println!("Registered peer ID [{}] to IP [{}]", id, remote_addr);
+                            let target_addr = format!("{}:{}", remote_addr.ip(), port);
+
+                            let mut map = registry_ref.lock().await;
+                            map.insert(id.clone(), target_addr.clone());
+                            println!("Registerd peer ID [{}] to target [{}]", id, target_addr);
+                        } else {
+                            println!("Invalid register protocol from {}", remote_addr);
+                            return;
+                        }
                     } else if message.starts_with("QUERY:") {
                         let id = message.strip_prefix("QUERY:").unwrap().to_string();
                         let map = registry_ref.lock().await;
@@ -99,7 +106,10 @@ mod tests {
         }
         let mut stream = stream.expect("Failed to connect to server");
 
-        stream.write_all(b"REGISTER:MOCK 8F3A 1234").await.unwrap();
+        stream
+            .write_all(b"REGISTER:MOCK 8F3A 1234:54321")
+            .await
+            .unwrap();
         sleep(Duration::from_millis(50)).await;
 
         {

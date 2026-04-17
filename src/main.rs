@@ -1,10 +1,7 @@
 use clap::{Parser, Subcommand};
 use ed25519_dalek::SigningKey;
 use rand::rngs::OsRng;
-use std::{
-    io::{self, Write},
-    net::TcpStream,
-};
+use std::io::{self, Write};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 mod server;
@@ -45,17 +42,39 @@ async fn main() {
                 .chunks(4)
                 .map(|chunk| std::str::from_utf8(chunk).unwrap())
                 .collect::<Vec<&str>>()
-                .join(" ");
+                .join("-");
 
             println!("Your ID: {}", formatted_id);
-            println!("Keep your private key secure and do not share it.");
-            println!("Connecting to network...");
+            println!("Keep your private key secure and do not share it.\n");
 
+            let p2p_listener = tokio::net::TcpListener::bind("0.0.0.0:0")
+                .await
+                .expect("Failed to bind a local port for P2P connection");
+
+            let local_p2p_port = p2p_listener.local_addr().unwrap().port();
+            println!(
+                "(Listening for direct P2P connections on port {})",
+                local_p2p_port
+            );
+
+            tokio::spawn(async move {
+                if let Ok((_socket, peer_addr)) = p2p_listener.accept().await {
+                    println!(
+                        "\n\n>>> DIRECT P2P CONNECTION ESTABLISHED FROM {} <<<",
+                        peer_addr
+                    );
+                    print!("> ");
+                    io::stdout().flush().unwrap();
+                }
+            });
+
+            println!("Connecting to network...");
             let mut _keep_alive_stream = None;
 
             match tokio::net::TcpStream::connect("127.0.0.1:8080").await {
                 Ok(mut stream) => {
-                    let payload = format!("REGISTER:{}", formatted_id);
+                    let payload = format!("REGISTER:{}:{}", formatted_id, local_p2p_port);
+
                     if let Err(e) = stream.write_all(payload.as_bytes()).await {
                         eprintln!("Failed to register with server: {}", e);
                     } else {
@@ -63,12 +82,12 @@ async fn main() {
                         _keep_alive_stream = Some(stream);
                     }
                 }
-
                 Err(e) => {
                     eprintln!("Warning: Could not connect to coordination server ({}).", e);
-                    eprintln!("Running in offline mode. You are not visible to your peers.");
+                    eprintln!("Running in offline mode. Peers will not be able to find you.");
                 }
             }
+
             loop {
                 print!("> ");
                 io::stdout().flush().unwrap();
@@ -95,13 +114,13 @@ async fn main() {
         }
 
         Commands::Connect { id } => {
-            println!("Looking for [{}] on the coordination server", id);
+            println!("Looking for [{}] on the coordination server...", id);
 
             match tokio::net::TcpStream::connect("127.0.0.1:8080").await {
                 Ok(mut stream) => {
                     let payload = format!("QUERY:{}", id);
                     if let Err(e) = stream.write_all(payload.as_bytes()).await {
-                        eprint!("Failed to query server: {}", e);
+                        eprintln!("Failed to query server: {}", e);
                         return;
                     }
 
@@ -111,12 +130,57 @@ async fn main() {
                             let response = String::from_utf8_lossy(&buffer[..n]).trim().to_string();
 
                             if response.starts_with("FOUND:") {
-                                let target_ip = response.strip_prefix("FOUND:").unwrap();
+                                let target_ip =
+                                    response.strip_prefix("FOUND:").unwrap().to_string();
                                 println!("Success! Peer found at network address: {}", target_ip);
-                                println!("(Actual P2P connection yet to be implemented");
+
+                                println!("Establishing direct P2P connection...");
+
+                                match tokio::net::TcpStream::connect(&target_ip).await {
+                                    Ok(_p2p_stream) => {
+                                        println!(
+                                            "\n\n>>> DIRECT P2P CONNECTION ESTABLISHED WITH {} <<<",
+                                            id
+                                        );
+
+                                        loop {
+                                            print!("> ");
+                                            io::stdout().flush().unwrap();
+
+                                            let mut input = String::new();
+                                            if io::stdin().read_line(&mut input).is_err() {
+                                                println!("Error reading input");
+                                                break;
+                                            }
+
+                                            let command = input.trim();
+
+                                            match command {
+                                                "nyx exit" => {
+                                                    println!("Session ended.");
+                                                    break;
+                                                }
+                                                "" => continue,
+                                                _ => {
+                                                    println!(
+                                                        "(Message not sent - P2P not implemented yet)"
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        eprintln!(
+                                            "Failed to establish direct P2P connection: {}",
+                                            e
+                                        );
+                                        eprintln!(
+                                            "The peer might have a firewall blocking incoming connections."
+                                        );
+                                    }
+                                }
                             } else if response == "NOT_FOUND" {
                                 eprintln!("Error: Peer [{}] not found.", id);
-                                eprintln!("They might be offline, or the ID is incorrect.");
                             } else {
                                 eprintln!(
                                     "Error: Received unknown response from server: {}",
