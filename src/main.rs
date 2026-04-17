@@ -5,7 +5,7 @@ use std::{
     io::{self, Write},
     net::TcpStream,
 };
-use tokio::{io::AsyncWriteExt, stream};
+use tokio::io::AsyncWriteExt;
 
 mod server;
 
@@ -55,7 +55,8 @@ async fn main() {
 
             match tokio::net::TcpStream::connect("127.0.0.1:8080").await {
                 Ok(mut stream) => {
-                    if let Err(e) = stream.write_all(formatted_id.as_bytes()).await {
+                    let payload = format!("REGISTER:{}", formatted_id);
+                    if let Err(e) = stream.write_all(payload.as_bytes()).await {
                         eprintln!("Failed to register with server: {}", e);
                     } else {
                         println!("Successfully registered online.");
