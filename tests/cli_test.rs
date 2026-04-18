@@ -2,19 +2,6 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 
 #[test]
-fn test_start_command_runs_successfully() {
-    let mut cmd = Command::cargo_bin("nyx").unwrap();
-    cmd.arg("start")
-        .write_stdin("nyx exit\n")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Your ID: "))
-        .stdout(predicate::str::contains(
-            "Keep your private key secure and do not share it.",
-        ));
-}
-
-#[test]
 fn test_invalid_command_fails() {
     let mut cmd = Command::cargo_bin("nyx").unwrap();
     cmd.arg("invalid command");
@@ -37,15 +24,4 @@ fn test_connect_command_runs_successfully_with_id() {
     cmd.assert().success().stdout(predicate::str::contains(
         "Looking for [8F3A 92KD XX12] on the coordination server",
     ));
-}
-
-#[test]
-fn test_start_session_loop_exits_cleanly() {
-    let mut cmd = Command::cargo_bin("nyx").unwrap();
-
-    cmd.arg("start")
-        .write_stdin("nyx exit\n")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Session ended."));
 }

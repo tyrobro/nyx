@@ -2,8 +2,7 @@ use clap::{Parser, Subcommand};
 use ed25519_dalek::SigningKey;
 use rand::rngs::OsRng;
 use std::io::{self, Write};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 mod server;
 
 #[derive(Parser)]
@@ -58,13 +57,12 @@ async fn main() {
             );
 
             tokio::spawn(async move {
-                if let Ok((_socket, peer_addr)) = p2p_listener.accept().await {
+                if let Ok((socket, peer_addr)) = p2p_listener.accept().await {
                     println!(
                         "\n\n>>> DIRECT P2P CONNECTION ESTABLISHED FROM {} <<<",
                         peer_addr
                     );
-                    print!("> ");
-                    io::stdout().flush().unwrap();
+                    handle_p2p_chat(socket).await;
                 }
             });
 
@@ -88,29 +86,8 @@ async fn main() {
                 }
             }
 
-            loop {
-                print!("> ");
-                io::stdout().flush().unwrap();
-
-                let mut input = String::new();
-                if io::stdin().read_line(&mut input).is_err() {
-                    println!("Error reading input");
-                    break;
-                }
-
-                let command = input.trim();
-
-                match command {
-                    "nyx exit" => {
-                        println!("Session ended.");
-                        break;
-                    }
-                    "" => continue,
-                    _ => {
-                        println!("(Message not sent - P2P not implemented yet)");
-                    }
-                }
-            }
+            tokio::signal::ctrl_c().await.unwrap();
+            println!("Shutting down node.");
         }
 
         Commands::Connect { id } => {
@@ -137,37 +114,13 @@ async fn main() {
                                 println!("Establishing direct P2P connection...");
 
                                 match tokio::net::TcpStream::connect(&target_ip).await {
-                                    Ok(_p2p_stream) => {
+                                    Ok(p2p_stream) => {
                                         println!(
                                             "\n\n>>> DIRECT P2P CONNECTION ESTABLISHED WITH {} <<<",
                                             id
                                         );
 
-                                        loop {
-                                            print!("> ");
-                                            io::stdout().flush().unwrap();
-
-                                            let mut input = String::new();
-                                            if io::stdin().read_line(&mut input).is_err() {
-                                                println!("Error reading input");
-                                                break;
-                                            }
-
-                                            let command = input.trim();
-
-                                            match command {
-                                                "nyx exit" => {
-                                                    println!("Session ended.");
-                                                    break;
-                                                }
-                                                "" => continue,
-                                                _ => {
-                                                    println!(
-                                                        "(Message not sent - P2P not implemented yet)"
-                                                    );
-                                                }
-                                            }
-                                        }
+                                        handle_p2p_chat(p2p_stream).await;
                                     }
                                     Err(e) => {
                                         eprintln!(
@@ -207,6 +160,58 @@ async fn main() {
 
             if let Err(e) = crate::server::start_server("0.0.0.0:8080", registry).await {
                 eprintln!("Server error: {}", e);
+            }
+        }
+    }
+}
+
+async fn handle_p2p_chat(stream: tokio::net::TcpStream) {
+    let (reader, mut writer) = tokio::io::split(stream);
+
+    let mut network_reader = BufReader::new(reader);
+    let mut stdin_reader = BufReader::new(tokio::io::stdin());
+
+    let mut network_line = String::new();
+    let mut stdin_line = String::new();
+
+    println!("Press Enter to send your message. Type 'nyx exit' to quit.");
+    print!("> ");
+    io::stdout().flush().unwrap();
+
+    loop {
+        tokio::select! {
+            result = network_reader.read_line(&mut network_line) => {
+                if result.unwrap_or(0) == 0 {
+                    println!("\n Peer Disconnected.");
+                    break;
+                }
+
+                print!("\r[Peer]: {}", network_line);
+                print!("> ");
+                io::stdout().flush().unwrap();
+                network_line.clear();
+            }
+
+            result = stdin_reader.read_line(&mut stdin_line) =>{
+                if result.unwrap_or(0) == 0 {
+                    break;
+                }
+
+                let command = stdin_line.trim();
+
+                if command == "nyx exit" {
+                    println!("Session ended.");
+                    break;
+                } else if !command.is_empty(){
+                    if writer.write_all(stdin_line.as_bytes()).await.is_err() {
+                        println!("\nFailed to send message. Peer may have disconnected.");
+                        break;
+                    }
+                }
+
+                print!("> ");
+                io::stdout().flush().unwrap();
+                stdin_line.clear();
             }
         }
     }

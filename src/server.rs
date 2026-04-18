@@ -17,7 +17,8 @@ pub async fn start_server(addr: &str, registry: Registry) -> io::Result<()> {
 
         tokio::spawn(async move {
             let mut buffer = [0; 1024];
-            let mut registered_id: Option<String> = None;
+
+            let registered_id: String;
 
             match socket.read(&mut buffer).await {
                 Ok(n) if n > 0 => {
@@ -28,13 +29,14 @@ pub async fn start_server(addr: &str, registry: Registry) -> io::Result<()> {
                         if parts.len() == 3 {
                             let id = parts[1].to_string();
                             let port = parts[2].to_string();
-                            registered_id = Some(id.clone());
+
+                            registered_id = id.clone();
 
                             let target_addr = format!("{}:{}", remote_addr.ip(), port);
 
                             let mut map = registry_ref.lock().await;
                             map.insert(id.clone(), target_addr.clone());
-                            println!("Registerd peer ID [{}] to target [{}]", id, target_addr);
+                            println!("Registered peer ID [{}] to target [{}]", id, target_addr);
                         } else {
                             println!("Invalid register protocol from {}", remote_addr);
                             return;
@@ -60,21 +62,20 @@ pub async fn start_server(addr: &str, registry: Registry) -> io::Result<()> {
                 _ => return,
             }
 
-            if registered_id.is_some() {
-                loop {
-                    match socket.read(&mut buffer).await {
-                        Ok(0) => break,
-                        Ok(_) => continue,
-                        Err(_) => break,
-                    }
-                }
-
-                if let Some(id) = registered_id {
-                    let mut map = registry_ref.lock().await;
-                    map.remove(&id);
-                    println!("Peer [{}] disconnected. Wiped from registry.", id);
+            loop {
+                match socket.read(&mut buffer).await {
+                    Ok(0) => break,
+                    Ok(_) => continue,
+                    Err(_) => break,
                 }
             }
+
+            let mut map = registry_ref.lock().await;
+            map.remove(&registered_id);
+            println!(
+                "Peer [{}] disconnected. Wiped from registry.",
+                registered_id
+            );
         });
     }
 }
