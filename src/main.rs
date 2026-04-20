@@ -3,6 +3,7 @@ use ed25519_dalek::SigningKey;
 use rand::rngs::OsRng;
 use std::io::{self, Write};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+mod crypto;
 mod server;
 
 #[derive(Parser)]
@@ -165,7 +166,20 @@ async fn main() {
     }
 }
 
-async fn handle_p2p_chat(stream: tokio::net::TcpStream) {
+async fn handle_p2p_chat(mut stream: tokio::net::TcpStream) {
+    println!("Peforming secure cryptographic handshake...");
+
+    let _shared_secret = match crate::crypto::perform_handshake(&mut stream).await {
+        Ok(secret) => secret,
+        Err(e) => {
+            eprintln!("Cryptographic handshake failed: {}", e);
+            return;
+        }
+    };
+
+    println!("Handshake successful! End-to-end secure tunnel established.");
+    println!("(Notice: Messages are not yet encrypted. We will use the secret in the next step!)");
+
     let (reader, mut writer) = tokio::io::split(stream);
 
     let mut network_reader = BufReader::new(reader);
