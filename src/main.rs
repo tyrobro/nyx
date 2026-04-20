@@ -1,8 +1,8 @@
 use clap::{Parser, Subcommand};
 use ed25519_dalek::SigningKey;
 use rand::rngs::OsRng;
-use std::io::{self, Write};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use std::io::Write;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 mod crypto;
 mod server;
 
@@ -166,7 +166,8 @@ async fn main() {
     }
 }
 
-// --- ENCRYPTED P2P CHAT HANDLER ---
+use rustyline_async::{Readline, ReadlineEvent};
+
 async fn handle_p2p_chat(mut stream: tokio::net::TcpStream) {
     println!("Performing secure cryptographic handshake...");
 
@@ -183,67 +184,69 @@ async fn handle_p2p_chat(mut stream: tokio::net::TcpStream) {
 
     let (mut reader, mut writer) = tokio::io::split(stream);
 
-    let mut stdin_reader = tokio::io::BufReader::new(tokio::io::stdin());
-    let mut stdin_line = String::new();
+    let (mut rl, mut stdout) =
+        Readline::new("> ".to_owned()).expect("Failed to initialize asynchronous terminal UI");
 
     println!("Type a message and press Enter to send. Type 'nyx exit' to quit.");
-    print!("> ");
-    io::stdout().flush().unwrap();
 
     loop {
         tokio::select! {
-            len_result = reader.read_u32() => {
-                let length = match len_result {
-                    Ok(l) => l as usize,
-                    Err(_) => {
-                        println!("\nPeer disconnected.");
-                        break;
-                    }
-                };
+         len_result = reader.read_u32() => {
+             let length = match len_result {
+                 Ok(l) => l as usize,
+                 Err(_) => {
+                     println!("\nPeer disconnected.");
+                     break;
+                 }
+             };
 
-                let mut payload = vec![0u8; length];
-                if reader.read_exact(&mut payload).await.is_err() {
-                    println!("\nFailed to read the full encrypted packet.");
-                    break;
-                }
+             let mut payload = vec![0u8; length];
+             if reader.read_exact(&mut payload).await.is_err() {
+                 println!("\nFailed to read the full encrypted packet.");
+                 break;
+             }
 
-                match crate::crypto::decrypt_message(&shared_secret, &payload) {
-                    Ok(text) => {
-                        print!("\r[Peer]: {}\n> ", text);
-                        io::stdout().flush().unwrap();
-                    }
-                    Err(e) => {
-                        println!("\n[SECURITY ALERT] Message decryption failed: {}", e);
-                        break;
-                    }
-                }
-            }
+             match crate::crypto::decrypt_message(&shared_secret, &payload) {
+                 Ok(text) => {
+                     writeln!(stdout, "[Peer]: {}", text).unwrap();
+                 }
+                 Err(e) => {
+                     println!("\n[SECURITY ALERT] Message decryption failed: {}", e);
+                     break;
+                 }
+             }
+         }
 
-            result = stdin_reader.read_line(&mut stdin_line) => {
-                if result.unwrap_or(0) == 0 {
-                    break;
-                }
+        readline_result = rl.readline() => {
+         match readline_result{
+             Ok(ReadlineEvent::Line(line)) => {
+                 let command = line.trim();
+                 rl.add_history_entry(line.clone());
 
-                let command = stdin_line.trim();
+                 if command == "nyx exit" {
+                     writeln!(stdout, "Session ended.").unwrap();
+                     break;
+                 } else if !command.is_empty() {
+                     let payload = crate::crypto::encrypt_message(&shared_secret, command);
 
-                if command == "nyx exit" {
-                    println!("Session ended.");
-                    break;
-                } else if !command.is_empty() {
+                     if writer.write_u32(payload.len() as u32).await.is_err() || writer.write_all(&payload).await.is_err() {
+                         writeln!(stdout, "\nFailed to send message. Peer may have disconnected").unwrap();
+                         break;
+                     }
+                 }
+             }
 
-                    let payload = crate::crypto::encrypt_message(&shared_secret, command);
-
-                    if writer.write_u32(payload.len() as u32).await.is_err() ||
-                       writer.write_all(&payload).await.is_err() {
-                        println!("\nFailed to send message. Peer may have disconnected.");
-                        break;
-                    }
-                }
-
-                print!("> ");
-                io::stdout().flush().unwrap();
-                stdin_line.clear();
-            }
+             Ok(ReadlineEvent::Eof) | Ok(ReadlineEvent::Interrupted) => {
+                 writeln!(stdout, "Session ended via Interrupt.").unwrap();
+                 break;
+             }
+             Err(e) => {
+                 writeln!(stdout, "Terminal read error: {}", e).unwrap();
+                 break;
+             }
+         }
         }
+         }
+        rl.flush().unwrap();
     }
 }
