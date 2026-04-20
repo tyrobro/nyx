@@ -166,10 +166,11 @@ async fn main() {
     }
 }
 
+// --- ENCRYPTED P2P CHAT HANDLER ---
 async fn handle_p2p_chat(mut stream: tokio::net::TcpStream) {
-    println!("Peforming secure cryptographic handshake...");
+    println!("Performing secure cryptographic handshake...");
 
-    let _shared_secret = match crate::crypto::perform_handshake(&mut stream).await {
+    let shared_secret = match crate::crypto::perform_handshake(&mut stream).await {
         Ok(secret) => secret,
         Err(e) => {
             eprintln!("Cryptographic handshake failed: {}", e);
@@ -178,35 +179,47 @@ async fn handle_p2p_chat(mut stream: tokio::net::TcpStream) {
     };
 
     println!("Handshake successful! End-to-end secure tunnel established.");
-    println!("(Notice: Messages are not yet encrypted. We will use the secret in the next step!)");
+    println!("(All network traffic is now fully encrypted via ChaCha20-Poly1305)\n");
 
-    let (reader, mut writer) = tokio::io::split(stream);
+    let (mut reader, mut writer) = tokio::io::split(stream);
 
-    let mut network_reader = BufReader::new(reader);
-    let mut stdin_reader = BufReader::new(tokio::io::stdin());
-
-    let mut network_line = String::new();
+    let mut stdin_reader = tokio::io::BufReader::new(tokio::io::stdin());
     let mut stdin_line = String::new();
 
-    println!("Press Enter to send your message. Type 'nyx exit' to quit.");
+    println!("Type a message and press Enter to send. Type 'nyx exit' to quit.");
     print!("> ");
     io::stdout().flush().unwrap();
 
     loop {
         tokio::select! {
-            result = network_reader.read_line(&mut network_line) => {
-                if result.unwrap_or(0) == 0 {
-                    println!("\n Peer Disconnected.");
+            len_result = reader.read_u32() => {
+                let length = match len_result {
+                    Ok(l) => l as usize,
+                    Err(_) => {
+                        println!("\nPeer disconnected.");
+                        break;
+                    }
+                };
+
+                let mut payload = vec![0u8; length];
+                if reader.read_exact(&mut payload).await.is_err() {
+                    println!("\nFailed to read the full encrypted packet.");
                     break;
                 }
 
-                print!("\r[Peer]: {}", network_line);
-                print!("> ");
-                io::stdout().flush().unwrap();
-                network_line.clear();
+                match crate::crypto::decrypt_message(&shared_secret, &payload) {
+                    Ok(text) => {
+                        print!("\r[Peer]: {}\n> ", text);
+                        io::stdout().flush().unwrap();
+                    }
+                    Err(e) => {
+                        println!("\n[SECURITY ALERT] Message decryption failed: {}", e);
+                        break;
+                    }
+                }
             }
 
-            result = stdin_reader.read_line(&mut stdin_line) =>{
+            result = stdin_reader.read_line(&mut stdin_line) => {
                 if result.unwrap_or(0) == 0 {
                     break;
                 }
@@ -216,8 +229,12 @@ async fn handle_p2p_chat(mut stream: tokio::net::TcpStream) {
                 if command == "nyx exit" {
                     println!("Session ended.");
                     break;
-                } else if !command.is_empty(){
-                    if writer.write_all(stdin_line.as_bytes()).await.is_err() {
+                } else if !command.is_empty() {
+
+                    let payload = crate::crypto::encrypt_message(&shared_secret, command);
+
+                    if writer.write_u32(payload.len() as u32).await.is_err() ||
+                       writer.write_all(&payload).await.is_err() {
                         println!("\nFailed to send message. Peer may have disconnected.");
                         break;
                     }
