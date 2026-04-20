@@ -57,23 +57,12 @@ async fn main() {
                 local_p2p_port
             );
 
-            tokio::spawn(async move {
-                if let Ok((socket, peer_addr)) = p2p_listener.accept().await {
-                    println!(
-                        "\n\n>>> DIRECT P2P CONNECTION ESTABLISHED FROM {} <<<",
-                        peer_addr
-                    );
-                    handle_p2p_chat(socket).await;
-                }
-            });
-
             println!("Connecting to network...");
             let mut _keep_alive_stream = None;
 
             match tokio::net::TcpStream::connect("127.0.0.1:8080").await {
                 Ok(mut stream) => {
                     let payload = format!("REGISTER:{}:{}", formatted_id, local_p2p_port);
-
                     if let Err(e) = stream.write_all(payload.as_bytes()).await {
                         eprintln!("Failed to register with server: {}", e);
                     } else {
@@ -83,12 +72,19 @@ async fn main() {
                 }
                 Err(e) => {
                     eprintln!("Warning: Could not connect to coordination server ({}).", e);
-                    eprintln!("Running in offline mode. Peers will not be able to find you.");
                 }
             }
 
-            tokio::signal::ctrl_c().await.unwrap();
-            println!("Shutting down node.");
+            println!("Waiting for a peer to connect. Press Ctrl+C to abort.");
+
+            if let Ok((socket, peer_addr)) = p2p_listener.accept().await {
+                println!(
+                    "\n\n>>> DIRECT P2P CONNECTION ESTABLISHED FROM {} <<<",
+                    peer_addr
+                );
+
+                handle_p2p_chat(socket).await;
+            }
         }
 
         Commands::Connect { id } => {
@@ -179,74 +175,105 @@ async fn handle_p2p_chat(mut stream: tokio::net::TcpStream) {
         }
     };
 
-    println!("Handshake successful! End-to-end secure tunnel established.");
-    println!("(All network traffic is now fully encrypted via ChaCha20-Poly1305)\n");
+    println!("Handshake successful! End-to-end secure tunnel established.\n");
 
     let (mut reader, mut writer) = tokio::io::split(stream);
 
     let (mut rl, mut stdout) =
         Readline::new("> ".to_owned()).expect("Failed to initialize asynchronous terminal UI");
 
-    println!("Type a message and press Enter to send. Type 'nyx exit' to quit.");
+    writeln!(
+        stdout,
+        "Type a message and press Enter to send. Type 'nyx exit' to quit."
+    )
+    .unwrap();
+    stdout.flush().unwrap();
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(100);
+
+    tokio::spawn(async move {
+        loop {
+            match rl.readline().await {
+                Ok(ReadlineEvent::Line(line)) => {
+                    rl.add_history_entry(line.clone());
+                    if tx.send(line).await.is_err() {
+                        break;
+                    }
+                }
+                Ok(ReadlineEvent::Eof) | Ok(ReadlineEvent::Interrupted) => {
+                    let _ = tx.send("nyx exit".to_string()).await;
+                    break;
+                }
+                Err(_) => break,
+            }
+        }
+        rl.flush().unwrap();
+    });
 
     loop {
         tokio::select! {
-         len_result = reader.read_u32() => {
-             let length = match len_result {
-                 Ok(l) => l as usize,
-                 Err(_) => {
-                     println!("\nPeer disconnected.");
-                     break;
-                 }
-             };
+            len_result = reader.read_u32() => {
+                let length = match len_result {
+                    Ok(l) => l as usize,
+                    Err(_) => {
+                        writeln!(stdout, "\nPeer disconnected abruptly.").unwrap();
+                        stdout.flush().unwrap();
+                        break;
+                    }
+                };
 
-             let mut payload = vec![0u8; length];
-             if reader.read_exact(&mut payload).await.is_err() {
-                 println!("\nFailed to read the full encrypted packet.");
-                 break;
-             }
+                let mut payload = vec![0u8; length];
+                if reader.read_exact(&mut payload).await.is_err() {
+                    break;
+                }
 
-             match crate::crypto::decrypt_message(&shared_secret, &payload) {
-                 Ok(text) => {
-                     writeln!(stdout, "[Peer]: {}", text).unwrap();
-                 }
-                 Err(e) => {
-                     println!("\n[SECURITY ALERT] Message decryption failed: {}", e);
-                     break;
-                 }
-             }
-         }
+                match crate::crypto::decrypt_message(&shared_secret, &payload) {
+                    Ok(text) => {
+                        if text == "/nyx_internal_drop_connection" {
+                            writeln!(stdout, "\n[System]: Peer has securely closed the connection.").unwrap();
+                            stdout.flush().unwrap();
+                            break;
+                        }
+                        writeln!(stdout, "[Peer]: {}", text).unwrap();
+                        stdout.flush().unwrap();
+                    }
+                    Err(e) => {
+                        writeln!(stdout, "\n[SECURITY ALERT] Decryption failed: {}", e).unwrap();
+                        stdout.flush().unwrap();
+                        break;
+                    }
+                }
+            }
 
-        readline_result = rl.readline() => {
-         match readline_result{
-             Ok(ReadlineEvent::Line(line)) => {
-                 let command = line.trim();
-                 rl.add_history_entry(line.clone());
+            keyboard_result = rx.recv() => {
+                if let Some(line) = keyboard_result {
+                    let command = line.trim();
 
-                 if command == "nyx exit" {
-                     writeln!(stdout, "Session ended.").unwrap();
-                     break;
-                 } else if !command.is_empty() {
-                     let payload = crate::crypto::encrypt_message(&shared_secret, command);
+                    if command == "nyx exit" {
+                        let payload = crate::crypto::encrypt_message(&shared_secret, "/nyx_internal_drop_connection");
+                        let _ = writer.write_u32(payload.len() as u32).await;
+                        let _ = writer.write_all(&payload).await;
+                        let _ = writer.flush().await;
 
-                     if writer.write_u32(payload.len() as u32).await.is_err() || writer.write_all(&payload).await.is_err() {
-                         writeln!(stdout, "\nFailed to send message. Peer may have disconnected").unwrap();
-                         break;
-                     }
-                 }
-             }
+                        writeln!(stdout, "Session ended. Disconnecting cleanly...").unwrap();
+                        stdout.flush().unwrap();
 
-             Ok(ReadlineEvent::Eof) | Ok(ReadlineEvent::Interrupted) => {
-                 writeln!(stdout, "Session ended via Interrupt.").unwrap();
-                 break;
-             }
-             Err(e) => {
-                 writeln!(stdout, "Terminal read error: {}", e).unwrap();
-                 break;
-             }
-         }
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        break;
+                    } else if !command.is_empty() {
+                        let payload = crate::crypto::encrypt_message(&shared_secret, command);
+                        if writer.write_u32(payload.len() as u32).await.is_err() ||
+                           writer.write_all(&payload).await.is_err() {
+                            writeln!(stdout, "\nFailed to send message. Peer disconnected.").unwrap();
+                            stdout.flush().unwrap();
+                            break;
+                        }
+                    }
+                }
+            }
         }
-         }
-        rl.flush().unwrap();
     }
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    std::process::exit(0);
 }
