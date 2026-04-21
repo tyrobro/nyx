@@ -99,7 +99,6 @@ async fn negotiate_role(stream: &mut TcpStream) -> io::Result<Role> {
             std::cmp::Ordering::Greater => return Ok(Role::Initiator),
             std::cmp::Ordering::Less => return Ok(Role::Responder),
             std::cmp::Ordering::Equal => {
-                // Tie — retry with new random bytes (average: resolves in ~1.004 rounds)
                 continue;
             }
         }
